@@ -42,7 +42,7 @@ public struct NotificationPlan: Equatable, Sendable {
         var seen = Set<UUID>()
         var selected: [Reminder] = []
         for item in eligible where seen.insert(item.id).inserted {
-            selected.append(Reminder(identifier: "daybook-\(item.id.uuidString)", date: item.reminder!))
+            selected.append(Reminder(identifier: "curios-\(item.id.uuidString)", date: item.reminder!))
             if selected.count == Self.schedulingLimit { break }
         }
         reminders = selected

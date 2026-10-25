@@ -1,5 +1,5 @@
 import Foundation
-import DaybookCore
+import CuriosCore
 
 @main
 struct AppIntegrationSmoke {
@@ -7,7 +7,12 @@ struct AppIntegrationSmoke {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("daybook-app-tests-\(UUID())")
         defer { try? FileManager.default.removeItem(at: folder) }
         let url = folder.appendingPathComponent("daybook.json")
-        let store = AppStore(url: url)
+        func legacyStore(_ target: URL) throws -> AppStore {
+            let seed = Persistence(url: target)
+            if try seed.load() == nil { try seed.save(.sample()) }
+            return AppStore(url: target)
+        }
+        let store = try legacyStore(url)
         precondition(!store.readOnly && !store.database.items.isEmpty, "Initial data failed")
         print("PASS app initial launch / local persistence")
         var item = store.draft(in: .list(.today)); item.title = "App integration test"; item.notes = "Independent test content"
@@ -139,7 +144,7 @@ struct AppIntegrationSmoke {
         precondition(preserved == "deliberately corrupt test file")
         print("PASS corrupt data is read-only and preserved")
         let sharedURL = folder.appendingPathComponent("shared/daybook.json")
-        let firstWriter = AppStore(url: sharedURL), staleWriter = AppStore(url: sharedURL)
+        let firstWriter = try legacyStore(sharedURL), staleWriter = AppStore(url: sharedURL)
         precondition(firstWriter.put(Item("First writer must survive")))
         let staleBefore = staleWriter.database
         _ = staleWriter.handleURL(URL(string: "curios://add?title=Stale%20capture")!)
@@ -153,7 +158,7 @@ struct AppIntegrationSmoke {
         staleWriter.cancelCapture(stalePreview)
         print("PASS stale writer cannot acknowledge capture or duplication, overwrite the first save, or discard its preview")
 
-        let ioStore = AppStore(url: folder.appendingPathComponent("io/daybook.json"))
+        let ioStore = try legacyStore(folder.appendingPathComponent("io/daybook.json"))
         let ioBefore = ioStore.database
         let importURL = folder.appendingPathComponent("incoming.json")
         var incoming = Database(); incoming.items = [Item("Bounded import")]

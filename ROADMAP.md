@@ -23,13 +23,24 @@ Curios V1 is the local macOS application in this repository. The product directi
 - [x] Confirm public `jfeflores/Curios`, GitHub noreply attribution and a clean release root that excludes private local ancestry; enable and verify private vulnerability reporting and secret scanning/push protection.
 - [x] Enforce source-only publication through an explicit reviewed index and selected release refs—never working-folder uploads, ignored investigation inputs, local app bundles or private data.
 
+## Encrypted Curios source update
+
+- [x] Rename active app/core/test modules and build/diagnostic identifiers to Curios; retain legacy profiles and capture compatibility.
+- [x] New-profile enrollment, CryptoKit AES-256-GCM vault, platform PBKDF2 passphrase and independent confirmed recovery.
+- [x] Encrypted managed backup/recovery/enrollment snapshot, resumable bounded legacy conversion, stale-writer and explicit missing/corrupt-primary recovery safeguards.
+- [x] All-window session locking, async-generation guards, generic reminder policy and explicit unsaved-draft warnings.
+- [x] Independent encrypted portable backup, explicit warned plaintext interchange, read-only complementary FileVault status/settings guidance.
+- [x] Clearly document the Ghidra/Things reverse-engineering skills origin and independent, gradually evolving open-source Swift todo-app direction.
+
+See [implementation evidence and limitations](docs/ENCRYPTED_STORAGE.md). Keychain/Touch ID, Argon2 adoption, rotation UI and a scalable transactional repository are not shipped claims.
+
 ## Remaining platform/release verification
 
 - [ ] Broader keyboard/VoiceOver, editing, multi-window, drag/drop and external accessibility coverage.
 - [ ] Real-system calendar/notification permission, revocation and delivery tests with deliberately selected test accounts.
 - [ ] Remote CI results on supported Xcode versions; more property/failure-injection and stress tests.
 - [ ] A deliberate signed/notarized distributor release or App Store build if binaries are distributed. Current builds are ad-hoc development builds.
-- [ ] Optional encrypted storage only after defining keys, enrollment, recovery and the intended threat model; no encryption promise today.
+- [ ] Broader signed/provisioned Keychain/Touch ID verification and independent cryptographic/security review before expanding unlock policies; current source builds use passphrase/recovery only.
 
 ## Distinct local planning experience
 
@@ -65,4 +76,4 @@ No server/backend, sign-in or synchronization is implemented in V1.
 
 Additional importers/connectors, weekly review, calendar time blocking, web/Android clients, small-group sharing, attachments and explainable scheduling assistance. Autonomous AI scheduling and enterprise project-management features are not initial-release commitments.
 
-See [the detailed product/architecture plan](docs/DAYBOOK_PRODUCT_PLAN.md). Historical Daybook investigation/parity reports document the prototype's origin; visual/feature parity is not the long-term product specification.
+See [the detailed product/architecture plan](docs/CURIOS_PRODUCT_PLAN.md). Historical Daybook investigation/parity reports document the prototype's origin; visual/feature parity is not the long-term product specification.

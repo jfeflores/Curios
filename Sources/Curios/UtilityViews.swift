@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import DaybookCore
+import CuriosCore
 
 struct QuickEntryView: View {
     @EnvironmentObject var store: AppStore
@@ -81,25 +81,29 @@ struct SettingsView: View {
                 }
                 Section("Reminders") {
                     Toggle("Allow Curios notifications", isOn: Binding(get: { store.database.preferences.notifications }, set: { value in
-                        if value { Task { if await store.integrations.requestNotifications() { store.preferences { $0.notifications = true } } } }
+                        if value { let token = store.sessionGeneration; Task { if await store.integrations.requestNotifications(), store.sessionGeneration == token, store.canReadContent { store.preferences { $0.notifications = true } } } }
                         else { store.preferences { $0.notifications = false } }
                     }))
                     Text("Permissions are requested only when enabled. Notifications use generic text, never task titles or notes. Curios does not access Things data or Things Cloud.").font(.caption).foregroundStyle(.secondary)
                 }
                 if let message = store.integrations.message { Text(message).font(.caption).foregroundStyle(.red) }
-                Section("About") { Text("Curios \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Development") · An independent, local-first task manager.").font(.caption); Text("Original code and SF Symbols. Not affiliated with Cultured Code.").font(.caption).foregroundStyle(.secondary) }
+                Section("About") { Text("Curios \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Development") · An independent, local-first task manager.").font(.caption); Text("Open-source Swift todo app. Originated as a Ghidra/Things reverse-engineering skills project; evolving independently. Not affiliated with Cultured Code.").font(.caption).foregroundStyle(.secondary) }
             }.formStyle(.grouped).tabItem { Label("General", systemImage: "gearshape") }
             CalendarSettingsView(integrations: store.integrations).environmentObject(store).tabItem { Label("Calendar", systemImage: "calendar") }
             Form {
                 Section("Local data") {
                     Text(store.persistence.url.path).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
-                    Text("Private, atomic JSON saves with stale-writer protection. The legacy Daybook folder is retained so existing data stays available. Files are not encrypted; keep independent backups.").font(.caption).foregroundStyle(.secondary)
+                    Text(store.isEncrypted ? "AES-256-GCM task vault, encrypted managed backups/recovery and private atomic writes. Keep independent encrypted backups and your recovery key separately." : "This legacy profile is still unencrypted. Enable the vault to encrypt its primary, backups and known recovery copies. Older binaries must be closed first.").font(.caption).foregroundStyle(.secondary)
+                    if store.isEncrypted { Button("Lock Curios Vault") { store.requestLockVault() } }
+                    else { Button("Enable Encrypted Vault…") { store.showingEnrollment = true } }
                     HStack { Button("Open Data Folder") { NSWorkspace.shared.open(store.persistence.url.deletingLastPathComponent()) }; Button("Restore Backup…") { restoreBackupConfirmation() } }
                 }
                 Section("Portable copies") {
-                    HStack { Button("Import JSON…") { store.importFile() }; Button("Export JSON…") { store.exportFile() } }
-                    Text("Curios and legacy Daybook schema-v1 JSON. Imports merge by ID and exports are unencrypted. No proprietary Things database is read or modified.").font(.caption).foregroundStyle(.secondary)
+                    HStack { Button("Encrypted Backup…") { store.exportEncryptedFile() }; Button("Import Encrypted Backup…") { store.importEncryptedFile() } }
+                    HStack { Button("Import JSON…") { store.importFile() }; Button("Export Plaintext JSON…") { store.exportFile() } }
+                    Text("Encrypted portable backups use a separate export passphrase. Imports merge by ID and keep current preferences. Plaintext JSON is an explicit interoperability option, not encrypted. No proprietary Things database is accessed.").font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Complementary system protection") { FileVaultGuidanceView() }
                 Section("Cloud") { Text("This build is local-only. Cloud sync, mail capture, collaboration, and mobile clients are not implemented.").font(.caption).foregroundStyle(.secondary) }
             }.formStyle(.grouped).tabItem { Label("Data", systemImage: "externaldrive") }
             ScrollView {
@@ -115,6 +119,8 @@ struct SettingsView: View {
                     Text("The global shortcut is registered only while Curios is running. It avoids macOS's Control-Space input-source shortcut.").font(.caption).foregroundStyle(.secondary).padding(.top, 10)
                 }.padding(28)
             }.tabItem { Label("Keyboard", systemImage: "keyboard") }
+        }.sheet(isPresented: $store.showingEnrollment) {
+            ScrollView { VaultEnrollmentView().padding(28) }.environmentObject(store).frame(width: 600, height: 620)
         }
     }
     func shortcut(_ title: String, _ key: String) -> some View { HStack { Text(title); Spacer(); Text(key).foregroundStyle(.secondary).font(.system(size: 12, design: .monospaced)) }.font(.system(size: 12)) }
@@ -131,7 +137,7 @@ private struct CalendarSettingsView: View {
             Section("Read-only calendar integration") {
                 Text("Display events next to your to-dos in Today and Upcoming. Curios never creates or changes calendar events.").font(.caption).foregroundStyle(.secondary)
                 Toggle("Show calendar events", isOn: Binding(get: { store.database.preferences.calendarEnabled }, set: { enabled in
-                    if enabled { Task { if await integrations.requestCalendar() { store.preferences { $0.calendarEnabled = true }; integrations.invalidateCalendar(); integrations.refreshCalendar(store.database.preferences) } } }
+                    if enabled { let token = store.sessionGeneration; Task { if await integrations.requestCalendar(), store.sessionGeneration == token, store.canReadContent { store.preferences { $0.calendarEnabled = true }; integrations.invalidateCalendar(); integrations.refreshCalendar(store.database.preferences) } } }
                     else { store.preferences { $0.calendarEnabled = false }; integrations.refreshCalendar(store.database.preferences) }
                 }))
                 if store.database.preferences.calendarEnabled {

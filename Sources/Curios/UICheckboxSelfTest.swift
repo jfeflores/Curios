@@ -1,19 +1,21 @@
-#if DAYBOOK_DIAGNOSTICS
+#if CURIOS_DIAGNOSTICS
 import AppKit
-import DaybookCore
+import CuriosCore
 
 /// Opt-in, in-process regression test. It can run only against a newly created,
 /// explicitly named synthetic profile, never the user's normal application data.
 @MainActor
 enum UICheckboxSelfTest {
+    static weak var registeredStore: AppStore?
     static func start() {
         let env = ProcessInfo.processInfo.environment
-        guard env["DAYBOOK_UI_TEST_MODE"] == "1", let directory = env["DAYBOOK_DATA_DIR"],
+        guard env["CURIOS_UI_TEST_MODE"] == "1", let directory = env["CURIOS_DATA_DIR"],
               URL(fileURLWithPath: directory).lastPathComponent.hasPrefix("ui-test-"),
-              let reportPath = env["DAYBOOK_UI_TEST_REPORT"] else { return }
-        let dataURL = URL(fileURLWithPath: directory).appendingPathComponent("daybook.json")
+              let reportPath = env["CURIOS_UI_TEST_REPORT"] else { return }
+        let dataURL = Persistence.defaultURL(environment: env)
         let reportURL = URL(fileURLWithPath: reportPath)
-        var report: [String: Any] = ["passed": false, "scenario": env["DAYBOOK_UI_SCENARIO"] ?? "today", "method": "In-process NSWindow mouse-down/up events against a real NSButton, with disk and rendered-state readback"]
+        if env["CURIOS_UI_SCENARIO"] == "vault" { testVault(at: dataURL, reportURL: reportURL); return }
+        var report: [String: Any] = ["passed": false, "scenario": env["CURIOS_UI_SCENARIO"] ?? "today", "method": "In-process NSWindow mouse-down/up events against a real NSButton, with disk and rendered-state readback"]
         do {
             let before = try Persistence.decode(Data(contentsOf: dataURL))
             guard let item = before.items(in: .today).first(where: { $0.kind == .task && !$0.isTemplate }),
@@ -53,6 +55,36 @@ enum UICheckboxSelfTest {
                 } catch { report["error"] = error.localizedDescription; finish(report, at: reportURL) }
             }
         } catch { report["error"] = error.localizedDescription; finish(report, at: reportURL) }
+    }
+    private static func testVault(at url: URL, reportURL: URL) {
+        Task { @MainActor in
+            var report: [String: Any] = ["passed": false, "scenario": "vault", "method": "Programmatic synthetic vault enrollment/lock/recovery with rendered NSView teardown and real native checkbox events; not automated credential-field typing"]
+            do {
+                guard let store = registeredStore, let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 700 }) else { throw DataError.invalid("Synthetic vault window is missing.") }
+                report["enrollmentRequired"] = store.vaultState == .needsEnrollment && store.database.items.isEmpty && !FileManager.default.fileExists(atPath: url.path)
+                capture(window, to: reportURL.deletingLastPathComponent().appendingPathComponent("vault-enrollment.png"))
+                let e = try Vault.enroll(passphrase: "Synthetic UI vault passphrase only")
+                guard await store.enableVault(e, confirmation: e.recoveryCode) else { throw DataError.invalid("Synthetic enrollment failed.") }
+                try await Task.sleep(nanoseconds: 250_000_000)
+                guard let item = store.database.items(in: .today).first(where: { $0.kind == .task && !$0.isTemplate }),
+                      let button = findButton(in: window.contentView, id: "task-completion-\(item.id.uuidString)") else { throw DataError.invalid("Encrypted task checkbox was not rendered.") }
+                click(button, in: window)
+                try await Task.sleep(nanoseconds: 200_000_000)
+                let raw = try Data(contentsOf: url)
+                let opened = try e.session.open(raw)
+                report["encryptedNativeCheckboxPersisted"] = Vault.isEncrypted(raw) && store.database.item(item.id)?.status == .completed && !opened.isEmpty
+                store.lockVault()
+                try await Task.sleep(nanoseconds: 250_000_000)
+                report["lockRemovesTaskViews"] = store.database.items.isEmpty && store.undoName == nil && findButton(in: window.contentView, id: "task-completion-\(item.id.uuidString)") == nil
+                capture(window, to: reportURL.deletingLastPathComponent().appendingPathComponent("vault-locked.png"))
+                guard await store.unlockVault(.recovery(e.recoveryCode)) else { throw DataError.invalid("Synthetic recovery unlock failed.") }
+                try await Task.sleep(nanoseconds: 250_000_000)
+                report["recoveryRestoresState"] = store.canReadContent && store.database.item(item.id)?.status == .completed
+                capture(window, to: reportURL.deletingLastPathComponent().appendingPathComponent("vault-unlocked.png"))
+                report["passed"] = ["enrollmentRequired", "encryptedNativeCheckboxPersisted", "lockRemovesTaskViews", "recoveryRestoresState"].allSatisfy { report[$0] as? Bool == true }
+            } catch { report["error"] = error.localizedDescription }
+            finish(report, at: reportURL)
+        }
     }
     private static func findButton(in view: NSView?, id: String) -> NSButton? {
         guard let view else { return nil }

@@ -1,6 +1,6 @@
 # Curios security policy
 
-Curios V1 is a young, local-only macOS application. Security hardening and passing tests are not certification that it is vulnerability-free. Use independent backups and do not treat plaintext task storage as an encrypted vault.
+Curios is a young, local-only macOS application. Current source supports an authenticated encrypted vault; legacy profiles are still plaintext until explicitly migrated. Security hardening and passing tests are not certification that it is vulnerability-free. Keep independent encrypted backups and recovery material separately.
 
 ## Reporting
 
@@ -12,13 +12,16 @@ GitHub secret scanning and push protection are enabled for this public repositor
 
 ## Scope and support
 
-The current V1 source receives best-effort maintenance. There is no older supported production-version matrix or hosted backend. Security fixes should include a regression and a clear release note; new cloud/auth/sync/AI features require a separate threat model and review.
+The current source receives best-effort maintenance. There is no older supported production-version matrix or hosted backend. Security fixes should include a regression and a clear release note; new cloud/auth/sync/AI features require a separate threat model and review.
 
-Current protections include private/ACL-aware atomic file handling, bounded inputs, observed-revision and cross-process write coordination, strict confirmed URL capture, privacy-safe notification text, and production exclusion of development screenshot/test hooks. See [the V1 hardening record](docs/V1_HARDENING.md) for evidence and [the original audit](docs/CURIOS_V1_SECURITY_REVIEW.md) for the findings that motivated the work.
+Current protections include CryptoKit AES-256-GCM vault snapshots, bounded passphrase/recovery wrapping, encrypted managed backups/recovery and independent encrypted export, explicit enrollment and session locking, private/ACL-aware atomic file handling, bounded inputs, stale-write rejection, confirmed capture and generic notification text. FileVault guidance/status is read-only, complementary protection. See [the encrypted-storage record](docs/ENCRYPTED_STORAGE.md), [format specification](docs/VAULT_FORMAT.md), [V1 hardening](docs/V1_HARDENING.md) and [historical audit](docs/CURIOS_V1_SECURITY_REVIEW.md).
 
 ## Limits
 
-- Tasks, backups, recovery copies and exports remain unencrypted. OS permissions do not protect against same-user malware or administrators, and deletion does not securely erase older copies/backups.
+- New profiles require vault enrollment. Existing legacy profiles and deliberately chosen plaintext JSON exports are unencrypted until explicitly migrated/protected. Migration cannot erase historical plaintext snapshots/backups or unrelated exports.
+- Source builds use passphrase/recovery unlock, not an unverified Keychain/Touch ID configuration. Either credential is sufficient; lose both and the vault is unrecoverable. Export passphrases are independent of the live recovery key. No hidden reset/decryption service exists.
+- Encryption does not protect plaintext or keys from a compromised app/OS while unlocked, guarantee Swift memory zeroization, hide all metadata or prevent rollback to authentic older ciphertext. Locking clears unsaved drafts/history; save edits first.
+- FileVault status concerns the Mac, not every export drive. Curios does not change system encryption settings or request its recovery key.
 - Atomic replacement and stale-write rejection are not cloud synchronization, automatic conflict merging or redundant backup.
 - macOS controls permission prompts, notification previews/delivery and background execution. Real-device permission/delivery testing is not replaced by pure planning tests.
 - Developer builds are ad-hoc signed, not notarized distributor releases. No production App Sandbox/Developer ID identity is configured by this source release.

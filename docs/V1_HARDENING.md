@@ -1,5 +1,7 @@
 # Curios V1 hardening and verification
 
+> Historical 1.0 source-release record. The later Curios module rename, encrypted vault and current verification are documented in [ENCRYPTED_STORAGE.md](ENCRYPTED_STORAGE.md); original 1.0 counts and internal names below remain historical evidence.
+
 **Date:** 2026-10-25. **Scope:** local macOS source release, not a hosted-backend or notarization certification. Approved public destination: [jfeflores/Curios](https://github.com/jfeflores/Curios).
 
 The [original audit](CURIOS_V1_SECURITY_REVIEW.md) is preserved as a historical record. Its five blockers were addressed in the current source rather than hidden by changing documentation.

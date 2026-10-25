@@ -1,14 +1,20 @@
 # Curios
 
-A native, local-first macOS task manager, published under the [Apache License 2.0](LICENSE). **V1 is a source release of a young application, not a claim of vulnerability-free software or a notarized App Store release.**
+**Project type: Reverse Engineering (Ghidra + Things), evolving into an independent open-source Swift todo app.** Built in Swift, SwiftUI and AppKit. Curios is a native, local-first macOS application under [Apache-2.0](LICENSE), gradually evolving into its own product with more features—not a commitment to remain a Things clone.
 
-[GitHub](https://github.com/jfeflores/Curios) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [V1 hardening](docs/V1_HARDENING.md) · [Product plan](docs/DAYBOOK_PRODUCT_PLAN.md)
+[GitHub](https://github.com/jfeflores/Curios) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [Encrypted storage](docs/ENCRYPTED_STORAGE.md) · [Product plan](docs/CURIOS_PRODUCT_PLAN.md)
 
-Curios began as the independent Daybook prototype studying publicly described Things workflows. It uses original SwiftUI/AppKit code, an original icon and synthetic sample content. It is not affiliated with Cultured Code. No proprietary binaries, vendor artwork, private task data, vendor cloud access or credentials belong in this repository.
+## Reverse-engineering origin: Ghidra and Things
+
+**This project began by studying Things with Ghidra, through REA, to practice and demonstrate reverse-engineering expertise and technical skills.** The earlier prototype was called Daybook. Bounded analysis of shipped application artifacts was combined with publicly documented behavior; recovered wrappers were not treated as proof of complete algorithms. See the [investigation, evidence and limitations](docs/REVERSE_ENGINEERING.md).
+
+Curios uses an independent Swift implementation, original branding/icon and synthetic sample content. This repository does **not** distribute proprietary binaries, copied decompiled source, vendor artwork, private task data, cloud protocols or credentials. The app does not access a Things user database, Things account or Things Cloud. Curios is not affiliated with or endorsed by Cultured Code.
+
+The investigation is the starting point, not the product's permanent specification. Future work will improve Curios as an independent open-source planner: useful daily commitments, better restart context, accessible workflows, trustworthy imports and additional features introduced gradually.
 
 ## Build and test
 
-Requires macOS 14+, a matching Swift 6+/Xcode toolchain, and Python 3 for the standalone test launcher. There are no third-party Swift package dependencies.
+Requires macOS 14+, a matching Swift 6+/Xcode toolchain, and Python 3 for the standalone test launcher. **The application has no third-party Swift package dependencies.** It uses Apple CryptoKit, CommonCrypto and system frameworks. The optional independent interoperability check has separate Python test dependencies.
 
 ```sh
 ./scripts/test.sh
@@ -16,81 +22,72 @@ Requires macOS 14+, a matching Swift 6+/Xcode toolchain, and Python 3 for the st
 open build/Curios.app
 ```
 
-The build creates a **locally ad-hoc-signed** development application. It is not notarized and has no developer-distribution identity. Building does not access another application's task data or grant calendar/notification permissions.
+The build creates an **ad-hoc-signed development app**, not a notarized distributor/App Store release. The source version is 1.1.0; passing checks are not a guarantee of vulnerability-free software. Building does not open vendor task data or grant calendar/notification permissions.
 
-On a matching Xcode toolchain, the package supports:
+With a matching Xcode toolchain:
 
 ```sh
 swift test
 swift run Curios
 ```
 
-The standalone scripts also support the local beta Command Line Tools installation whose SwiftPM interfaces do not match its compiler. They select the already-installed macOS 15.4 SDK when available; they do not install or change a system toolchain. Override with `DAYBOOK_SDK=/path/to/MacOSX.sdk` if needed. CI uses the runner's Xcode toolchain; an actual remote CI result is separate from local verification.
+The scripts accommodate the existing local Command Line Tools/SDK mismatch without installing/changing toolchains. Override the SDK with `CURIOS_SDK=/path/to/MacOSX.sdk`; the old `DAYBOOK_SDK` remains a compatibility fallback. Isolate parallel test outputs with `CURIOS_TEST_BUILD_DIR=.build/my-tests ./scripts/test.sh`.
 
-For isolated parallel test outputs:
+## Encrypted storage and FileVault
 
-```sh
-DAYBOOK_TEST_BUILD_DIR=.build/my-tests ./scripts/test.sh
-```
+**New profiles require enrollment before task data is written. Existing legacy profiles are not silently migrated:** use **Settings → Data → Enable Encrypted Vault**. Their main window displays “encryption off” until migration.
 
-## What V1 contains
+- **AES-256-GCM** encrypts the full task/preferences payload and managed backups/recovery snapshots; headers are authenticated and inputs bounded.
+- A random vault key is unlocked by a long unique passphrase using **PBKDF2-HMAC-SHA-256, 600,000 iterations**, or an independent random recovery key. Save and re-enter the complete recovery key before enrollment. Either credential decrypts the vault; losing both is unrecoverable.
+- **Encrypted Backup** creates a portable copy using independent key material and its own export passphrase. The live recovery key does not unlock that export. Explicit **Plaintext JSON Export** remains available with a warning.
+- Encrypted vaults open locked. Manual lock, sleep/session/display-lock signals and approximately 15 minutes of Curios input inactivity clear session content/history/caches. **Save edits first: unsaved editor/Quick Entry drafts are cleared.** Manual lock warns; automatic privacy locking cannot wait for a prompt.
+- **FileVault is complementary protection.** Curios provides a read-only status check and settings link. It never turns FileVault on/off, requests administrator privileges, collects its recovery key or changes system encryption settings. Status does not verify external/export drives.
 
-- Inbox, Today/Evening, Upcoming, Anytime, Someday, completed work, and restorable Trash.
-- Projects, headings, areas, nested/inherited tags, filtering and search.
-- Notes/Markdown preview, checklists, independent start dates and deadlines, reminders, completion and cancellation.
+Keep recovery material separately and retain independent encrypted backups. Close older builds before migration. Conversion is bounded/resumable and preserves original content in an encrypted enrollment snapshot; it does not erase prior plaintext from APFS/Time Machine, old exports or other copies. Missing keys/corrupt data never silently create a replacement database.
+
+This release does **not** claim Keychain/Touch ID/Secure Enclave unlock, Argon2, cloud E2EE, secure deletion, guaranteed memory erasure, malicious rollback detection or protection from a compromised app/OS while unlocked. Ordinary mutations still serialize/encrypt complete snapshots synchronously; a scalable transactional repository remains future work.
+
+See [PRIVACY.md](PRIVACY.md), [implementation evidence and limitations](docs/ENCRYPTED_STORAGE.md), and the [versioned format](docs/VAULT_FORMAT.md).
+
+## What Curios contains
+
+- Inbox, Today/Evening, Upcoming, Anytime, Someday, completed work and restorable Trash.
+- Projects/headings/areas, nested and inherited tags, filtering and search.
+- Notes/Markdown preview, checklists, independent start/deadline dates, reminders, completion and cancellation.
 - Repeating task/project templates with regular and after-completion schedules.
 - Quick Entry, keyboard commands, multi-selection, batch edits, duplication, basic drag/drop and session undo/redo.
-- Schema-v1 Curios/legacy Daybook JSON import/export, previous-valid backup and explicit recovery.
-- Optional read-only EventKit calendar display and privacy-preserving local reminders.
-- Multiple windows, light/dark/system appearances, and a separate capture confirmation for external links.
+- Encrypted vault/backup/recovery plus schema-v1 Curios/legacy JSON interchange; import merges records by ID and retains destination preferences.
+- Optional read-only EventKit calendar display and generic local reminders.
+- Multiple windows, appearance preferences and confirmed external capture.
 
-**Not implemented:** accounts, cloud sync/backend, Siri/App Intents, widgets, mobile/watch clients, third-party task importers, mail capture, or collaboration. These are [roadmap proposals](ROADMAP.md), not advertised V1 capabilities. Original prototype boundaries are recorded in [the historical feature matrix](docs/FEATURE_PARITY.md).
-
-## Security and data integrity
-
-V1 hardening adds:
-
-- Private app-managed directories and files, removal of macOS ACL grants on managed objects, descriptor-pinned/no-follow file operations, and private atomic replacement.
-- A shared 64 MiB serialized save/load ceiling, bounded reads before allocation, indexed relationship validation, field/depth limits, and bounded/resumable recurrence work.
-- A persistent sidecar file lock plus observed-revision checks. A stale process must reload instead of silently overwriting newer work.
-- URL capture preview/confirmation, strict allow-listed inputs, size limits and per-session approved-capture deduplication.
-- Generic notification text rather than task/project content, and serialized scheduling reconciliation.
-- Developer screenshot/UI-test hooks excluded from normal builds.
-
-See [the hardening record](docs/V1_HARDENING.md) for verification and remaining limits. These protections do **not** encrypt your tasks, protect them from malware running as your user, guarantee OS notification delivery, or replace independent backups. If a save reports that the database changed elsewhere, preserve your unsaved text and reopen/reload before editing; no automatic multi-device merge is provided.
+**Not implemented:** accounts, cloud backend/sync, Siri/App Intents, widgets, mobile/watch clients, third-party task importers, mail capture or collaboration. These are [roadmap proposals](ROADMAP.md), not shipped capabilities. Notification timing/opaque IDs remain OS metadata; already scheduled generic reminders may fire while locked and can become stale until unlock.
 
 ## Your data and legacy compatibility
 
-Curios deliberately keeps the existing Daybook data location and schema so upgrading the app name does not abandon existing work:
+New profiles use `~/Library/Application Support/Curios/curios.json`, with `.backup`, `.vault`, `.lock` and uniquely named `.recovery-*` sidecars. The `.json` basename can contain binary ciphertext. `.vault` is the encrypted enrollment snapshot/barrier and intentionally retains the original enrolled state.
 
-```text
-~/Library/Application Support/Daybook/daybook.json
-~/Library/Application Support/Daybook/daybook.json.backup
-~/Library/Application Support/Daybook/daybook.json.lock
-```
+Existing `~/Library/Application Support/Daybook/daybook.json` profiles retain their location/basename and lock so renaming does not abandon existing work. A current Curios profile takes precedence if both locations exist; independent profiles are not silently merged. Older recovery names are discovered during migration. **Never unlink a persistent `.lock` file while processes run.**
 
-Restoration can preserve `daybook.json.recovery-*` copies; older builds used `recovered-*`. The persistent lock file is intentional—do not unlink it while processes are running. User exports are named `Curios-YYYY-MM-DD.json` and contain the whole database, including completed/trashed work and preferences.
+Managed files remain private/ACL-aware and atomically replaced, with no-follow/type/ownership checks, persistent cross-process locking and stale-writer rejection. Plaintext payloads are capped at 64 MiB; ciphertext has a bounded overhead allowance. Field/collection/depth and recurrence work limits remain enforced. A stale process must reload, not silently overwrite newer work.
 
-**All are unencrypted.** Recovery copies, backups, exports and OS backup systems may retain deleted information. The first launch creates original sample tasks. Existing data outside V1's documented safety bounds is preserved and rejected rather than truncated or silently overwritten. See [PRIVACY.md](PRIVACY.md).
-
-Use synthetic, isolated data when developing:
+Develop only with synthetic, isolated profiles:
 
 ```sh
-DAYBOOK_DATA_DIR="$PWD/.analysis/my-test-data" build/Curios.app/Contents/MacOS/Curios
+CURIOS_DATA_DIR="$PWD/.analysis/my-test-data" build/Curios.app/Contents/MacOS/Curios
 ```
 
-This environment override remains an intentional local configuration, not a network feature. Do not point unattended tests at your normal profile.
+`CURIOS_DATA_DIR` discovers an existing legacy basename in that folder; `DAYBOOK_DATA_DIR` still selects the legacy basename for compatibility. Do not point unattended tests at a normal profile. The active source targets are **Curios** and **CuriosCore**; remaining Daybook names document compatibility or historical evidence.
 
 ## Capture links
 
-Both the new and legacy schemes are registered:
+Both `curios` and legacy `daybook` schemes remain registered:
 
 ```text
 curios://add?title=Plan%20the%20week&when=tomorrow&notes=Three%20priorities
 curios://show?list=upcoming
 ```
 
-`add` opens a preview: nothing is saved until you approve it. Identical approved captures are deduplicated for the running session. Only add and allow-listed list navigation are supported; unknown fields, duplicate query names, malformed dates and oversized input are rejected. Do not put secrets in URLs—browsers and launchers may retain them. The app never registers or impersonates the vendor's `things` scheme.
+Capture requires an unlocked/legacy-open session and explicit preview/approval. Locked links are rejected, not queued as plaintext. Inputs are allow-listed/bounded and approved duplicates are suppressed per session. Do not put secrets in URLs—browsers/launchers may retain them. Curios never registers or impersonates the vendor's `things` scheme.
 
 ## Useful shortcuts
 
@@ -104,17 +101,28 @@ curios://show?list=upcoming
 | Anytime / Someday / deadline | ⌘R / ⌘O / ⇧⌘D |
 | Save editor / Quick Entry | ⌘Return / ⌃⇧Space |
 | Multiline paste / sidebar | ⇧⌘V / ⌘/ |
+| Lock encrypted vault | ⌃⌘L |
 
-## UI regression diagnostics
+## Verification and developer diagnostics
+
+Local verification includes **83 core/domain/security tests**, **19 existing plus 9 encrypted application groups**, **three isolated native UI scenarios**, and independent Python/OpenSSL passphrase/recovery interoperability. Normal/diagnostic builds, SourceKit checks and staged secret/content review are additional gates; these checks are not a third-party security audit. Remote CI for new changes requires an actual push and is not inferred from local results.
 
 ```sh
 ./scripts/ui-test.sh
 ```
 
-This explicitly compiles `DAYBOOK_DIAGNOSTICS`, launches a separate review bundle and creates synthetic profiles under ignored `.analysis/`. It tests native checkbox events, visible state and disk readback. Ordinary builds ignore screenshot/UI-test launch hooks. This is not a full external accessibility or OS-permission audit.
+The UI launcher explicitly compiles `CURIOS_DIAGNOSTICS`, uses a separate review bundle and synthetic profiles under ignored `.analysis/`, and checks native checkbox events plus encrypted lifecycle/view teardown. It does not automate every credential-field interaction or prove all OS permission/lock/accessibility behavior. Normal builds omit these hooks.
 
-## License and contributions
+For optional independent format verification after `scripts/test.sh`:
 
-Original project source/documentation is made available under **Apache-2.0**; see [LICENSE](LICENSE). Contributors must have the right to submit their work under that license. Apple frameworks/system symbols and third-party trademarks remain under their respective terms; this declaration does not license vendor artifacts or establish legal clearance for them.
+```sh
+python3 -m venv .build/interop-python
+.build/interop-python/bin/python -m pip install cryptography==50.0.2 cffi==2.1.1 pycparser==3.12
+CURIOS_INTEROP_PYTHON=.build/interop-python/bin/python ./scripts/interop-test.sh
+```
 
-Publish only reviewed source. Never commit `.analysis/`, `.build/`, `build/`, credentials/signing material, real data/exports, raw decompiler evidence or private screenshots. Use the security policy for private reports rather than posting sensitive material in public issues.
+## License, contributions and publication
+
+Original project source/documentation is **Apache-2.0**. Contributors must have the right to submit their work. Apple frameworks/system symbols, test dependencies and third-party trademarks retain their respective terms; this license does not grant rights to proprietary investigation inputs or establish legal clearance for them.
+
+Publish reviewed source only. Never commit `.analysis/`, `.build/`, `build/`, virtualenvs, credentials/signing material, real databases/exports—even ciphertext—recovery kits, private screenshots or raw decompiler evidence. Use [private vulnerability reporting](SECURITY.md), not public issues containing sensitive material.

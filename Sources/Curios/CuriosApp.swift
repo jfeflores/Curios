@@ -1,5 +1,5 @@
 import SwiftUI
-import DaybookCore
+import CuriosCore
 
 struct WindowActions {
     var create: (ItemKind) -> Void
@@ -16,29 +16,29 @@ struct WindowActions {
 private struct WindowActionsKey: FocusedValueKey { typealias Value = WindowActions }
 private struct EditorFinishKey: FocusedValueKey { typealias Value = (Bool) -> Void }
 extension FocusedValues {
-    var daybookActions: WindowActions? { get { self[WindowActionsKey.self] } set { self[WindowActionsKey.self] = newValue } }
-    var daybookFinishEditor: ((Bool) -> Void)? { get { self[EditorFinishKey.self] } set { self[EditorFinishKey.self] = newValue } }
+    var curiosActions: WindowActions? { get { self[WindowActionsKey.self] } set { self[WindowActionsKey.self] = newValue } }
+    var curiosFinishEditor: ((Bool) -> Void)? { get { self[EditorFinishKey.self] } set { self[EditorFinishKey.self] = newValue } }
 }
 @main
-struct DaybookApp: App {
+struct CuriosApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     @StateObject private var store = AppStore()
     var body: some Scene {
         WindowGroup("Curios", id: "main") {
-            ContentView().environmentObject(store)
+            VaultGate { ContentView() }.environmentObject(store)
                 .preferredColorScheme(store.database.preferences.appearance == "dark" ? .dark : (store.database.preferences.appearance == "light" ? .light : nil))
         }.windowStyle(.hiddenTitleBar).defaultSize(width: 1120, height: 790)
-            .commands { DaybookCommands(store: store) }
+            .commands { CuriosCommands(store: store) }
         Window("Quick Entry", id: "quick-entry") {
-            QuickEntryView().environmentObject(store)
+            VaultGate { QuickEntryView() }.environmentObject(store)
         }.defaultSize(width: 570, height: 460).windowResizability(.contentSize)
-        Settings { SettingsView().environmentObject(store).frame(width: 590, height: 490) }
+        Settings { VaultGate { SettingsView() }.environmentObject(store).frame(width: 650, height: 620) }
     }
 }
-struct DaybookCommands: Commands {
+struct CuriosCommands: Commands {
     @ObservedObject var store: AppStore
-    @FocusedValue(\.daybookActions) private var actions
-    @FocusedValue(\.daybookFinishEditor) private var finishEditor
+    @FocusedValue(\.curiosActions) private var actions
+    @FocusedValue(\.curiosFinishEditor) private var finishEditor
     @Environment(\.openWindow) private var openWindow
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -84,8 +84,13 @@ struct DaybookCommands: Commands {
             Button("Show / Hide Sidebar") { actions?.toggleSidebar() }.keyboardShortcut("/")
         }
         CommandGroup(after: .importExport) {
-            Button("Import Curios / Daybook JSON…") { store.importFile() }
-            Button("Export Curios JSON…") { store.exportFile() }
+            Button("Encrypted Backup…") { store.exportEncryptedFile() }.disabled(!store.canReadContent)
+            Button("Import Encrypted Backup…") { store.importEncryptedFile() }.disabled(!store.canReadContent)
+            Divider()
+            Button("Import Curios / Legacy JSON…") { store.importFile() }.disabled(!store.canReadContent)
+            Button("Export Plaintext JSON…") { store.exportFile() }.disabled(!store.canReadContent)
+            Divider()
+            Button("Lock Curios Vault") { store.requestLockVault() }.keyboardShortcut("l", modifiers: [.command, .control]).disabled(!store.isEncrypted || !store.canReadContent)
         }
     }
 }

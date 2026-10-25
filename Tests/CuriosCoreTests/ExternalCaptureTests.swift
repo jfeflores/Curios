@@ -1,9 +1,9 @@
-#if DAYBOOK_STANDALONE_TESTS
+#if CURIOS_STANDALONE_TESTS
 import Foundation
 #else
 import XCTest
 #endif
-@testable import DaybookCore
+@testable import CuriosCore
 
 final class ExternalCaptureTests: XCTestCase {
     private func link(_ host: String = "add", _ arguments: [URLQueryItem], scheme: String = "curios") -> URL {

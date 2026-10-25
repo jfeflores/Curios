@@ -1,5 +1,5 @@
 import SwiftUI
-import DaybookCore
+import CuriosCore
 
 struct ItemEditor: View {
     @EnvironmentObject private var store: AppStore
@@ -12,6 +12,7 @@ struct ItemEditor: View {
     @State private var showRepeat = false
     @State private var finished = false
     @State private var existedAtOpen = false
+    @State private var openedSession: UUID?
     private let original: Item
     @FocusState private var titleFocused: Bool
     let onSave: (Item) -> Void
@@ -128,9 +129,9 @@ struct ItemEditor: View {
         }.padding(22).background(Style.paper, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(Style.hairline))
             .shadow(color: .black.opacity(0.07), radius: 16, y: 5)
-            .focusedValue(\.daybookFinishEditor, { cancel in finishByCheckbox(cancel: cancel) })
-            .onAppear { existedAtOpen = store.database.item(original.id) != nil; titleFocused = true }
-            .onDisappear { if !finished, existedAtOpen, !value.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { store.commitEdit(value, original: original, allowCreate: false) } }
+            .focusedValue(\.curiosFinishEditor, { cancel in finishByCheckbox(cancel: cancel) })
+            .onAppear { openedSession = store.sessionGeneration; existedAtOpen = store.database.item(original.id) != nil; titleFocused = true }
+            .onDisappear { if openedSession == store.sessionGeneration, store.canReadContent, !finished, existedAtOpen, !value.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { store.commitEdit(value, original: original, allowCreate: false) } }
     }
     var whenLabel: String {
         if value.placement == .someday { return "Someday" }
@@ -142,11 +143,13 @@ struct ItemEditor: View {
         value.checklist += lines.map { ChecklistEntry($0) }; checklistText = ""
     }
     func save() {
+        guard openedSession == store.sessionGeneration, store.canReadContent else { return }
         addChecklist()
         guard let saved = store.commitEdit(value, original: original, allowCreate: !existedAtOpen) else { return }
         finished = true; onSave(saved)
     }
     func finishByCheckbox(cancel: Bool) {
+        guard openedSession == store.sessionGeneration, store.canReadContent else { return }
         addChecklist()
         guard let saved = store.commitEdit(value, original: original, allowCreate: !existedAtOpen) else { return }
         store.complete([saved.id], cancel: cancel)

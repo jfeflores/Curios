@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import DaybookCore
+import CuriosCore
 
 @MainActor
 final class AppStore: ObservableObject {
@@ -16,25 +16,137 @@ final class AppStore: ObservableObject {
     @Published private(set) var importing = false
     private var pendingCaptureCommand: ExternalCapture.Command?
     private var approvedCaptures: [ExternalCapture.Command] = []
-    let persistence: Persistence
+    enum VaultState { case needsEnrollment, legacyPlaintext, locked, unlocking, unlocked, failed }
+    @Published private(set) var vaultState: VaultState = .needsEnrollment
+    @Published private(set) var sessionGeneration = UUID()
+    @Published var showingEnrollment = false
+    private var vaultDescriptor: Vault.Descriptor?
+    private var activeVault: Vault.Session?
+    private(set) var persistence: Persistence
+    var canReadContent: Bool { !readOnly && (vaultState == .legacyPlaintext || vaultState == .unlocked) }
+    var isEncrypted: Bool { vaultDescriptor != nil }
     private var undoStack: [(String, Database)] = []
     private var redoStack: [(String, Database)] = []
     private var refreshTimer: Timer?
+    private var lastActivity = Date()
+    private var privacyObservers: [(NotificationCenter, NSObjectProtocol)] = []
+    deinit { for (center, observer) in privacyObservers { center.removeObserver(observer) } }
     let integrations = Integrations()
 
     init(url: URL = Persistence.defaultURL()) {
         persistence = Persistence(url: url)
         do {
-            if let loaded = try persistence.load() { database = loaded }
-            else { database = .sample(); try persistence.save(database) }
-            refresh()
+            switch try persistence.storageState() {
+            case .empty: readOnly = true; vaultState = .needsEnrollment
+            case .plaintext:
+                guard let loaded = try persistence.load() else { throw DataError.invalid("Existing data disappeared. No replacement was created.") }
+                database = loaded; vaultState = .legacyPlaintext; refresh()
+            case .encrypted(let descriptor, _):
+                vaultDescriptor = descriptor; readOnly = true; vaultState = .locked
+            }
         } catch {
-            readOnly = true
+            readOnly = true; vaultState = .failed
             errorMessage = "Curios could not load its data. The original file is untouched. Restore its backup in Settings or inspect the data folder.\n\n\(error.localizedDescription)"
         }
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.sessionDidResignActiveNotification, NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification] {
+            privacyObservers.append((workspace, workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.lockVault() }
+            }))
+        }
+        let distributed = DistributedNotificationCenter.default()
+        privacyObservers.append((distributed, distributed.addObserver(forName: Notification.Name("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.lockVault() }
+        }))
+        let local = NotificationCenter.default
+        privacyObservers.append((local, local.addObserver(forName: .curiosUserActivity, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.lastActivity = Date() }
+        }))
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
+    }
+    /// Session generations prevent late work from reopening a vault after lock.
+    @discardableResult
+    func enableVault(_ enrollment: Vault.Enrollment, confirmation: String) async -> Bool {
+        guard vaultState == .needsEnrollment || vaultState == .legacyPlaintext,
+              enrollment.session.verifiesRecovery(confirmation) else {
+            errorMessage = "Confirm the complete recovery key before encryption. Nothing was changed."; return false
+        }
+        lastActivity = Date()
+        let source = persistence
+        vaultDescriptor = enrollment.session.descriptor
+        let token = UUID(); sessionGeneration = token
+        vaultState = .unlocking; readOnly = true; showingEnrollment = false; clearSensitiveState()
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                let storage = try source.enableEncryption(using: enrollment.session, initial: .sample())
+                guard let loaded = try storage.load() else { throw DataError.invalid("The encrypted vault is missing.") }
+                return (storage, loaded)
+            }.value
+            guard sessionGeneration == token else { return false }
+            persistence = result.0; activeVault = enrollment.session; database = result.1
+            vaultState = .unlocked; readOnly = false; errorMessage = nil; refresh(); return true
+        } catch {
+            guard sessionGeneration == token else { return false }
+            persistence = Persistence(url: source.url)
+            if case .encrypted(let descriptor, _) = try? persistence.storageState() {
+                vaultDescriptor = descriptor; vaultState = .locked
+            } else { vaultDescriptor = nil; vaultState = .failed }
+            errorMessage = "Encryption did not finish. Original files were preserved; unlock to resume when offered.\n\n\(error.localizedDescription)"
+            return false
+        }
+    }
+    @discardableResult
+    func unlockVault(_ credential: Vault.Credential, restoreBackup: Bool = false) async -> Bool {
+        guard vaultState == .locked, vaultDescriptor != nil else { return false }
+        lastActivity = Date()
+        let source = Persistence(url: persistence.url), token = UUID()
+        sessionGeneration = token; vaultState = .unlocking; readOnly = true; errorMessage = nil
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                guard case .encrypted(let descriptor, let pending) = try source.storageState() else { throw DataError.invalid("Vault metadata changed. Restart and inspect the data folder.") }
+                let session = try Vault.unlock(descriptor, with: credential)
+                let storage: Persistence
+                if restoreBackup { storage = source.encrypted(using: session) }
+                else { storage = pending ? try source.enableEncryption(using: session) : source.encrypted(using: session) }
+                let loaded = restoreBackup ? try storage.restoreBackup() : try storage.load()
+                guard let loaded else { throw DataError.invalid("The primary is missing. Choose explicit backup recovery; no new database was created.") }
+                return (storage, loaded, session)
+            }.value
+            guard sessionGeneration == token else { return false }
+            persistence = result.0; database = result.1; activeVault = result.2; vaultDescriptor = result.2.descriptor
+            vaultState = .unlocked; readOnly = false; errorMessage = nil; refresh(); return true
+        } catch {
+            guard sessionGeneration == token else { return false }
+            vaultState = .locked; errorMessage = error.localizedDescription; return false
+        }
+    }
+    private func clearSensitiveState() {
+        database = Database(); undoStack = []; redoStack = []; completionFeedback = [:]
+        pendingCapture = nil; pendingCaptureCommand = nil; approvedCaptures = []; importing = false
+        updateHistory(); integrations.clearPrivateDisplayState()
+    }
+    func requestLockVault() {
+        guard isEncrypted, canReadContent else { return }
+        let alert = NSAlert(); alert.messageText = "Lock Curios and clear unsaved drafts?"
+        alert.informativeText = "Save edits first. Locking clears editor/Quick Entry drafts and undo history in every Curios window. Automatic sleep/session/15-minute inactivity locking also clears drafts. Scheduled generic reminders may still fire."
+        alert.addButton(withTitle: "Lock and Clear Drafts"); alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { lockVault() }
+    }
+    func lockVault() {
+        guard isEncrypted || vaultState == .unlocking else {
+            // Enrollment has sensitive, not-yet-persisted recovery material too.
+            // Recreate its view and reject pending derivation/confirmation actions.
+            if vaultState == .needsEnrollment || showingEnrollment {
+                sessionGeneration = UUID(); showingEnrollment = false; errorMessage = nil
+            }
+            return
+        }
+        sessionGeneration = UUID(); showingEnrollment = false; readOnly = true
+        clearSensitiveState(); activeVault = nil
+        persistence = Persistence(url: persistence.url)
+        vaultState = .locked; errorMessage = nil
     }
     @discardableResult
     func transact(_ name: String, _ mutation: (inout Database) -> Void) -> Bool {
@@ -54,22 +166,21 @@ final class AppStore: ObservableObject {
     }
     private func updateHistory() { undoName = undoStack.last?.0; redoName = redoStack.last?.0 }
     func undo() {
+        guard canReadContent else { return }
         guard let (name, state) = undoStack.last else { return }
         do { try persistence.save(state); undoStack.removeLast(); redoStack.append((name, database)); database = state; completionFeedback = [:]; updateHistory(); integrations.updateNotifications(state) }
         catch { errorMessage = error.localizedDescription }
     }
     func redo() {
+        guard canReadContent else { return }
         guard let (name, state) = redoStack.last else { return }
         do { try persistence.save(state); redoStack.removeLast(); undoStack.append((name, database)); database = state; completionFeedback = [:]; updateHistory(); integrations.updateNotifications(state) }
         catch { errorMessage = error.localizedDescription }
     }
     func refresh() {
         today = Day()
-        guard !readOnly else {
-            integrations.updateNotifications(Database())
-            integrations.refreshCalendar(Preferences())
-            return
-        }
+        if activeVault != nil, Date().timeIntervalSince(lastActivity) >= 15 * 60 { lockVault(); return }
+        guard canReadContent else { integrations.clearPrivateDisplayState(); return }
         do {
             var next = try database.validated()
             _ = next.materialize(asOf: today)
@@ -212,20 +323,31 @@ final class AppStore: ObservableObject {
     }
     func preferences(_ update: (inout Preferences) -> Void) { transact("Change settings") { update(&$0.preferences) } }
     func importFile() {
+        guard canReadContent else { return }
+        let requestGeneration = sessionGeneration
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.json]; panel.canChooseDirectories = false
         panel.message = "Merge a Curios or legacy Daybook JSON export. Matching IDs are updated; unrelated items are preserved. This is not a Things database importer."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        Task { await importData(from: url) }
+        guard panel.runModal() == .OK, let url = panel.url, sessionGeneration == requestGeneration else { return }
+        let token = sessionGeneration
+        Task { guard sessionGeneration == token, canReadContent else { return }; await importData(from: url) }
     }
     @discardableResult
-    func importData(from url: URL) async -> Bool {
+    func importData(from url: URL, credential: Vault.Credential? = nil) async -> Bool {
         guard !importing, !readOnly else { errorMessage = "Resolve the loading problem or wait for the current import before importing."; return false }
         importing = true
-        defer { importing = false }
+        let token = sessionGeneration
+        defer { if sessionGeneration == token { importing = false } }
         do {
             let incoming = try await Task.detached(priority: .userInitiated) {
-                try Persistence.decode(Persistence.readData(from: url))
+                let bytes = try Persistence.readData(from: url)
+                if Vault.isEncrypted(bytes) {
+                    guard let credential else { throw DataError.invalid("Use Import Encrypted Backup and enter its export passphrase.") }
+                    return try Vault.decryptExport(bytes, with: credential)
+                }
+                guard credential == nil else { throw DataError.invalid("This is plaintext. Choose the explicit JSON import option instead.") }
+                return try Persistence.decode(bytes)
             }.value
+            guard sessionGeneration == token, canReadContent else { return false }
             let itemIDs = Set(incoming.items.map(\.id)), areaIDs = Set(incoming.areas.map(\.id)), tagIDs = Set(incoming.tags.map(\.id))
             // Check merged counts before allocating the merged arrays. Validate relationships before recurrence.
             guard database.items.lazy.filter({ !itemIDs.contains($0.id) }).count + incoming.items.count <= InputLimits.maximumItems,
@@ -238,16 +360,66 @@ final class AppStore: ObservableObject {
                 db.areas.removeAll { areaIDs.contains($0.id) }; db.areas += incoming.areas
                 db.tags.removeAll { tagIDs.contains($0.id) }; db.tags += incoming.tags
             }
-        } catch { errorMessage = error.localizedDescription; return false }
+        } catch { if sessionGeneration == token { errorMessage = error.localizedDescription }; return false }
     }
     func exportFile() {
+        guard canReadContent else { return }
+        let requestGeneration = sessionGeneration
         let panel = NSSavePanel(); panel.allowedContentTypes = [.json]; panel.nameFieldStringValue = "Curios-\(today.iso).json"
         panel.message = "This export is unencrypted plain text, including task titles, notes, and checklist content. Save it only somewhere you trust."
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do { try Persistence.export(database, to: url) }
+        guard canReadContent, sessionGeneration == requestGeneration else { return }
+        do { try persistence.validateExportDestination(url); try Persistence.export(database, to: url) }
         catch { errorMessage = error.localizedDescription }
     }
+    private func requestExportPassphrase(creating: Bool) -> String? {
+        let alert = NSAlert()
+        alert.messageText = creating ? "Protect this portable backup" : "Unlock this portable backup"
+        alert.informativeText = creating ? "Use a unique passphrase of at least 12 characters and store it safely. This backup is independent of your live vault recovery key. Losing its passphrase makes the backup unrecoverable." : "Enter the export passphrase. The validated contents merge by ID; current preferences are retained. The original backup is not modified."
+        let password = NSSecureTextField(frame: NSRect(x: 0, y: 38, width: 360, height: 26))
+        password.placeholderString = "Export passphrase"; password.setAccessibilityLabel("Export passphrase")
+        let confirmation = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 26))
+        confirmation.placeholderString = "Confirm export passphrase"; confirmation.setAccessibilityLabel("Confirm export passphrase")
+        let view = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: creating ? 68 : 32))
+        if !creating { password.frame.origin.y = 0 }
+        view.addSubview(password); if creating { view.addSubview(confirmation) }
+        alert.accessoryView = view; alert.addButton(withTitle: creating ? "Continue" : "Import"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn, canReadContent else { return nil }
+        guard !creating || (password.stringValue == confirmation.stringValue && password.stringValue.count >= 12) else {
+            errorMessage = "The export passphrases must match and contain at least 12 characters."; return nil
+        }
+        return password.stringValue
+    }
+    func exportEncryptedFile() {
+        guard canReadContent else { return }
+        let requestGeneration = sessionGeneration
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.data]
+        panel.nameFieldStringValue = "Curios-\(today.iso).curiosvault"
+        panel.message = "Create an encrypted portable backup. It contains all tasks, completed/trashed work and preferences. Store its separate export passphrase safely."
+        guard panel.runModal() == .OK, let url = panel.url, canReadContent,
+              let passphrase = requestExportPassphrase(creating: true) else { return }
+        guard sessionGeneration == requestGeneration, canReadContent else { return }
+        do { try persistence.validateExportDestination(url) }
+        catch { errorMessage = error.localizedDescription; return }
+        let snapshot = database, token = sessionGeneration
+        Task {
+            do { try await Task.detached(priority: .userInitiated) { try Persistence.exportEncrypted(snapshot, to: url, passphrase: passphrase) }.value }
+            catch { if sessionGeneration == token { errorMessage = error.localizedDescription } }
+        }
+    }
+    func importEncryptedFile() {
+        guard canReadContent else { return }
+        let requestGeneration = sessionGeneration
+        let panel = NSOpenPanel(); panel.allowedContentTypes = [.data]; panel.canChooseDirectories = false
+        panel.message = "Choose a Curios portable encrypted backup. Import merges records by ID; this is not an in-place vault replacement."
+        guard panel.runModal() == .OK, let url = panel.url, canReadContent,
+              let passphrase = requestExportPassphrase(creating: false) else { return }
+        guard sessionGeneration == requestGeneration, canReadContent else { return }
+        let token = sessionGeneration
+        Task { guard sessionGeneration == token, canReadContent else { return }; await importData(from: url, credential: .passphrase(passphrase)) }
+    }
     func pasteTasks(in destination: Destination) {
+        guard canReadContent else { return }
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
         pasteTasks(text, in: destination)
     }
@@ -263,13 +435,15 @@ final class AppStore: ObservableObject {
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func restoreBackup() {
+        guard canReadContent || (vaultState == .failed && !isEncrypted) else { return }
         do {
             let restored = try persistence.restoreBackup()
-            database = restored; readOnly = false; errorMessage = nil; undoStack = []; redoStack = []; completionFeedback = [:]; updateHistory()
+            database = restored; readOnly = false; vaultState = isEncrypted ? .unlocked : .legacyPlaintext; errorMessage = nil; undoStack = []; redoStack = []; completionFeedback = [:]; updateHistory()
             integrations.updateNotifications(restored)
         } catch { errorMessage = error.localizedDescription }
     }
     func handleURL(_ url: URL) -> Destination? {
+        guard canReadContent else { errorMessage = "Unlock Curios before opening capture links. The link was not queued or saved."; return nil }
         guard let scheme = url.scheme?.lowercased(), ["curios", "daybook"].contains(scheme) else { return nil }
         do {
             let command = try ExternalCapture.parse(url)

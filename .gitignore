@@ -19,6 +19,10 @@ build/
 *.mobileprovision
 
 # Runtime databases, backups, and recovery copies (not source fixtures)
+curios.json
+curios.json.*
+*.curiosvault
+Curios-recovery-*
 daybook.json
 daybook.json.*
 curios.json

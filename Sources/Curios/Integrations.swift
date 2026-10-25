@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import EventKit
 import UserNotifications
-import DaybookCore
+import CuriosCore
 import Carbon
 
 @MainActor
@@ -13,9 +13,16 @@ final class Integrations: ObservableObject {
     private let eventStore = EKEventStore()
     private var lastCalendarRefresh = Date.distantPast
     private var calendarRequestRunning = false
+    private var displayGeneration = UUID()
+    func clearPrivateDisplayState() {
+        displayGeneration = UUID(); events = []; calendars = []; message = nil
+        lastCalendarRefresh = .distantPast
+    }
     func requestCalendar() async -> Bool {
+        let generation = displayGeneration
         do {
             guard try await eventStore.requestFullAccessToEvents() else { message = "Calendar access wasn't granted. Nothing was read."; return false }
+            guard displayGeneration == generation else { return false }
             calendars = eventStore.calendars(for: .event); lastCalendarRefresh = .distantPast
             return true
         } catch { message = error.localizedDescription; return false }
@@ -42,16 +49,16 @@ final class Integrations: ObservableObject {
     }
     func requestNotifications() async -> Bool {
         guard supportsNotifications else { message = "Build and open Curios.app to enable notifications."; return false }
-        #if DAYBOOK_DIAGNOSTICS
-        guard ProcessInfo.processInfo.environment["DAYBOOK_UI_TEST_MODE"] != "1" else { return false }
+        #if CURIOS_DIAGNOSTICS
+        guard ProcessInfo.processInfo.environment["CURIOS_UI_TEST_MODE"] != "1" else { return false }
         #endif
         do { return try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) }
         catch { message = "macOS could not authorize notifications."; return false }
     }
     func updateNotifications(_ database: Database) {
         guard supportsNotifications else { return }
-        #if DAYBOOK_DIAGNOSTICS
-        guard ProcessInfo.processInfo.environment["DAYBOOK_UI_TEST_MODE"] != "1" else { return }
+        #if CURIOS_DIAGNOSTICS
+        guard ProcessInfo.processInfo.environment["CURIOS_UI_TEST_MODE"] != "1" else { return }
         #endif
         notificationRevision &+= 1
         queuedNotificationPlan = NotificationPlan(database: database)
@@ -110,33 +117,41 @@ final class Integrations: ObservableObject {
     }
 }
 
-extension Notification.Name { static let daybookQuickEntry = Notification.Name("Daybook.QuickEntry") }
+extension Notification.Name {
+    static let curiosQuickEntry = Notification.Name("Curios.QuickEntry")
+    static let curiosUserActivity = Notification.Name("Curios.UserActivity")
+}
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: EventHotKeyRef?
     private var handler: EventHandlerRef?
+    private var activityMonitor: Any?
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
-        #if DAYBOOK_DIAGNOSTICS
-        if ProcessInfo.processInfo.environment["DAYBOOK_UI_TEST_MODE"] == "1" {
+        #if CURIOS_DIAGNOSTICS
+        if ProcessInfo.processInfo.environment["CURIOS_UI_TEST_MODE"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { UICheckboxSelfTest.start() }
             return
         }
         #endif
+        activityMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]) { event in
+            NotificationCenter.default.post(name: .curiosUserActivity, object: nil)
+            return event
+        }
         var specification = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
             DispatchQueue.main.async {
                 NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .daybookQuickEntry, object: nil)
+                NotificationCenter.default.post(name: .curiosQuickEntry, object: nil)
             }
             return noErr
         }, 1, &specification, nil, &handler)
         let id = EventHotKeyID(signature: 0x44415942, id: 1)
         // Ctrl-Shift-Space avoids replacing the system's Ctrl-Space input-source shortcut.
         RegisterEventHotKey(UInt32(kVK_Space), UInt32(controlKey | shiftKey), id, GetApplicationEventTarget(), 0, &hotKey)
-        #if DAYBOOK_DIAGNOSTICS
+        #if CURIOS_DIAGNOSTICS
         if let flag = CommandLine.arguments.firstIndex(of: "--snapshot"), flag + 1 < CommandLine.arguments.count {
             let path = CommandLine.arguments[flag + 1]
             // Rendering only this application's own NSView needs no cross-app access.
@@ -144,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
     }
-    #if DAYBOOK_DIAGNOSTICS
+    #if CURIOS_DIAGNOSTICS
     private func captureOwnWindow(to path: String) {
         guard let window = NSApp.windows.first(where: { $0.isVisible && $0.frame.width > 700 }), let view = window.contentView else { print("Snapshot: no main window"); return }
         view.layoutSubtreeIfNeeded(); view.displayIfNeeded()
@@ -158,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
     func applicationWillTerminate(_ notification: Notification) {
+        if let activityMonitor { NSEvent.removeMonitor(activityMonitor) }
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let handler { RemoveEventHandler(handler) }
     }

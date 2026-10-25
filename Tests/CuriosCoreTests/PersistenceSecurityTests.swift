@@ -1,10 +1,10 @@
-#if DAYBOOK_STANDALONE_TESTS
+#if CURIOS_STANDALONE_TESTS
 import Foundation
 #else
 import XCTest
 #endif
 import Darwin
-@testable import DaybookCore
+@testable import CuriosCore
 
 final class PersistenceSecurityTests: XCTestCase {
     func withDirectory(_ body: (URL) throws -> Void) throws {

@@ -1,4 +1,6 @@
-# Daybook: codebase review and product plan
+# Curios: codebase review and product plan
+
+> Historical architecture assessment of the Daybook prototype, now renamed Curios. Original source paths and test counts below describe the reviewed snapshot, not current implementation claims.
 
 > Planning snapshot from before Curios V1 hardening. The subsequently authorized security/data-integrity work is recorded in [V1_HARDENING.md](V1_HARDENING.md). Broader design, cloud and integration proposals below remain roadmap items, not implemented capabilities.
 

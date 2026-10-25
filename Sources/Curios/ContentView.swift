@@ -1,6 +1,6 @@
 import SwiftUI
 import AppKit
-import DaybookCore
+import CuriosCore
 
 private struct ItemSection: Identifiable {
     var id: String
@@ -107,12 +107,12 @@ struct ContentView: View {
                 footer
             }.background(Style.paper)
         }.background(Style.sidebar).frame(minWidth: 870, minHeight: 620)
-            .focusedSceneValue(\.daybookActions, actions)
+            .focusedSceneValue(\.curiosActions, actions)
             .background(KeyRouter(onKey: handleKey).frame(width: 0, height: 0))
             .onChange(of: store.database.items.map(\.id)) { _, ids in selected.formIntersection(ids) }
-            .onReceive(NotificationCenter.default.publisher(for: .daybookQuickEntry)) { _ in openWindow(id: "quick-entry") }
+            .onReceive(NotificationCenter.default.publisher(for: .curiosQuickEntry)) { _ in openWindow(id: "quick-entry") }
             .onOpenURL { url in if let target = store.handleURL(url) { navigate(target) } }
-            #if DAYBOOK_DIAGNOSTICS
+            #if CURIOS_DIAGNOSTICS
             .onAppear(perform: configureSnapshotState)
             #endif
             .sheet(isPresented: $finding) { QuickFindView(query: $query, navigate: navigate, chooseItem: revealItem).environmentObject(store) }
@@ -170,7 +170,11 @@ struct ContentView: View {
                 Button("Manage Tags…") { managingTags = true }
                 Button(db.preferences.showCompleted ? "Hide completed items" : "Show completed items") { store.preferences { $0.showCompleted.toggle() } }
                 Divider()
-                Button("Import Curios / Daybook JSON…") { store.importFile() }; Button("Export Curios JSON…") { store.exportFile() }
+                Button("Encrypted Backup…") { store.exportEncryptedFile() }
+                Button("Import Encrypted Backup…") { store.importEncryptedFile() }
+                Button("Import Curios / Legacy JSON…") { store.importFile() }
+                Button("Export Plaintext JSON…") { store.exportFile() }
+                Button("Lock Curios Vault") { store.requestLockVault() }.disabled(!store.isEncrypted)
             } label: { Image(systemName: "ellipsis.circle") }.menuStyle(.borderlessButton).frame(width: 21)
         }.buttonStyle(.plain).font(.system(size: 14)).foregroundStyle(.secondary)
             .padding(.horizontal, 24).padding(.leading, showSidebar ? 0 : 70).frame(height: 43)
@@ -249,7 +253,7 @@ struct ContentView: View {
                     }
                 }.id(item.id)
                     .dropDestination(for: String.self) { values, _ in
-                        let ids = values.compactMap(\.daybookItemID); for id in ids { store.reorder(id, before: item.id) }; return !ids.isEmpty
+                        let ids = values.compactMap(\.curiosItemID); for id in ids { store.reorder(id, before: item.id) }; return !ids.isEmpty
                     }
             }
         }
@@ -268,6 +272,7 @@ struct ContentView: View {
                 Button { create(.task) } label: { Label("New To-Do", systemImage: "plus") }.help("New to-do (⌘N)")
                 if project != nil { Button { create(.heading) } label: { Image(systemName: "text.badge.plus") }.help("New heading (⇧⌘N)") }
                 Spacer()
+                Text(store.isEncrypted ? "Encrypted vault" : "Legacy profile · encryption off").font(.system(size: 10)).foregroundStyle(store.isEncrypted ? Color.secondary : Color.orange).help("Configure encryption in Settings → Data. FileVault is complementary protection.")
                 Text("\(items.filter { $0.kind == .task && $0.status == .open }.count) to-dos").font(.system(size: 11)).foregroundStyle(.tertiary)
                 Spacer()
                 if !selected.isEmpty { Button { store.move(selected, to: .list(.trash)) } label: { Image(systemName: "trash") }.help("Move selected items to Trash") }
@@ -281,7 +286,7 @@ struct ContentView: View {
                       showWhen: { showBatchWhen = true }, showDeadline: { showBatchDeadline = true }, showTags: { showBatchTags = true },
                       toggleSidebar: { showSidebar.toggle() }, paste: { store.pasteTasks(in: destination) })
     }
-    #if DAYBOOK_DIAGNOSTICS
+    #if CURIOS_DIAGNOSTICS
     private func configureSnapshotState() {
         guard let flag = CommandLine.arguments.firstIndex(of: "--snapshot-state"), flag + 1 < CommandLine.arguments.count else { return }
         let state = CommandLine.arguments[flag + 1]
@@ -360,7 +365,7 @@ private struct SidebarView: View {
                                 Button { if collapsed.contains(area.id) { collapsed.remove(area.id) } else { collapsed.insert(area.id) } } label: { Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold)).rotationEffect(.degrees(collapsed.contains(area.id) ? 0 : 90)).foregroundStyle(.tertiary).frame(width: 14) }.buttonStyle(.plain)
                                 Button { destination = .area(area.id) } label: { HStack { Text(area.title).font(.system(size: 12, weight: .semibold)); Spacer() }.contentShape(Rectangle()) }.buttonStyle(.plain).padding(.vertical, 8)
                             }.padding(.horizontal, 8).background(destination == .area(area.id) ? Style.selection : .clear, in: RoundedRectangle(cornerRadius: 6))
-                                .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.daybookItemID); store.move(Set(ids), to: .area(area.id)); return !ids.isEmpty }
+                                .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.curiosItemID); store.move(Set(ids), to: .area(area.id)); return !ids.isEmpty }
                             if !collapsed.contains(area.id) {
                                 ForEach(projects.filter { $0.areaID == area.id }) { project in projectRow(project) }
                             }
@@ -386,7 +391,7 @@ private struct SidebarView: View {
             HStack(spacing: 9) { ProjectProgress(progress: store.database.progress(item.id), size: 14); Text(item.title).font(.system(size: 12)).lineLimit(1); Spacer(minLength: 0); if item.isTemplate { Image(systemName: "repeat").font(.system(size: 9)).foregroundStyle(.tertiary) } }
                 .padding(.vertical, 7).padding(.leading, 24).padding(.trailing, 10).contentShape(Rectangle())
         }.buttonStyle(.plain).background(destination == .project(item.id) ? Style.selection : .clear, in: RoundedRectangle(cornerRadius: 6))
-            .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.daybookItemID); store.move(Set(ids), to: .project(item.id)); return !ids.isEmpty }
+            .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.curiosItemID); store.move(Set(ids), to: .project(item.id)); return !ids.isEmpty }
     }
     private func row(title: String, icon: String, color: Color, destination target: Destination, count: Int?) -> some View {
         Button { destination = target } label: {
@@ -397,7 +402,7 @@ private struct SidebarView: View {
                 if let count, count > 0 { Text("\(count)").font(.system(size: 11)).foregroundStyle(.secondary) }
             }.padding(.horizontal, 10).frame(height: 31).contentShape(Rectangle())
         }.buttonStyle(.plain).background(destination == target ? Style.selection : .clear, in: RoundedRectangle(cornerRadius: 6))
-            .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.daybookItemID); store.move(Set(ids), to: target); return !ids.isEmpty }
+            .dropDestination(for: String.self) { values, _ in let ids = values.compactMap(\.curiosItemID); store.move(Set(ids), to: target); return !ids.isEmpty }
     }
 }
 
@@ -433,7 +438,7 @@ private struct TaskRow: View {
                     Label(day.label(relativeTo: store.today), systemImage: "flag.fill").font(.system(size: 10)).foregroundStyle(day <= store.today ? .pink : .secondary).lineLimit(1)
                 } else if let start = item.start, start > store.today { Text(start.label(relativeTo: store.today)).font(.system(size: 10)).foregroundStyle(.secondary) }
             }.contentShape(Rectangle()).onTapGesture(count: 2, perform: open).onTapGesture(perform: select)
-                .draggable("daybook-item:\(item.id.uuidString)")
+                .draggable("curios-item:\(item.id.uuidString)")
             if hovering && !item.isTemplate && item.isOpen {
                 Button { when = true } label: { Image(systemName: "calendar").font(.system(size: 12)).foregroundStyle(.secondary) }.buttonStyle(.plain).help("When")
                     .popover(isPresented: $when) { WhenHost(item: item) }
@@ -517,7 +522,7 @@ struct CalendarAgenda: View {
         }
     }
 }
-extension String { var daybookItemID: UUID? { hasPrefix("daybook-item:") ? UUID(uuidString: String(dropFirst(13))) : nil } }
+extension String { var curiosItemID: UUID? { hasPrefix("curios-item:") ? UUID(uuidString: String(dropFirst(12))) : nil } }
 
 private struct KeyRouter: NSViewRepresentable {
     var onKey: (NSEvent) -> Bool

@@ -1,9 +1,9 @@
-#if DAYBOOK_STANDALONE_TESTS
+#if CURIOS_STANDALONE_TESTS
 import Foundation
 #else
 import XCTest
 #endif
-@testable import DaybookCore
+@testable import CuriosCore
 
 final class ValidationSecurityTests: XCTestCase {
     func testIndexedTagGraphHandlesWideInputAndBoundsDepth() throws {

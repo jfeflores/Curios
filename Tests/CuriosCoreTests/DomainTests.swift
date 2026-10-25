@@ -1,9 +1,9 @@
-#if DAYBOOK_STANDALONE_TESTS
+#if CURIOS_STANDALONE_TESTS
 import Foundation
 #else
 import XCTest
 #endif
-@testable import DaybookCore
+@testable import CuriosCore
 
 final class DomainTests: XCTestCase {
     var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/New_York")!; return c }

@@ -206,4 +206,4 @@ It is reasonable to invite contributors to an explicitly experimental source rel
 - [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0.txt) and [official licensing/application FAQ](https://www.apache.org/foundation/license-faq.html#Apply-My-Software).
 - [GitHub secret scanning](https://docs.github.com/code-security/secret-scanning/about-secret-scanning): pattern coverage is not a guarantee that all secrets or private data are detected.
 - [GitHub private vulnerability reporting configuration](https://docs.github.com/code-security/security-advisories/working-with-repository-security-advisories/configuring-private-vulnerability-reporting-for-a-repository).
-- [Public roadmap](../ROADMAP.md), [privacy notes](../PRIVACY.md), [security policy](../SECURITY.md), [product/architecture plan](DAYBOOK_PRODUCT_PLAN.md).
+- [Public roadmap](../ROADMAP.md), [privacy notes](../PRIVACY.md), [security policy](../SECURITY.md), [product/architecture plan](CURIOS_PRODUCT_PLAN.md).

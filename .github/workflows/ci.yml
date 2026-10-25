@@ -22,5 +22,10 @@ jobs:
         run: swift test
       - name: Standalone domain and application regressions
         run: ./scripts/test.sh
+      - name: Independent vault format verification with Python and OpenSSL
+        run: |
+          python3 -m venv .build/interop-python
+          .build/interop-python/bin/python -m pip install cryptography==50.0.2 cffi==2.1.1 pycparser==3.12
+          CURIOS_INTEROP_PYTHON=.build/interop-python/bin/python ./scripts/interop-test.sh
       - name: Build the local development app without diagnostic hooks
         run: ./scripts/build.sh

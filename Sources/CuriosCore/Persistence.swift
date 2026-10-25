@@ -15,6 +15,11 @@ public struct Persistence {
         var known = true // New stores may create a missing file, not overwrite an unseen one.
     }
     private let observation = Observation()
+    private var encryption: Vault.Session?
+    public enum StorageState {
+        case empty, plaintext
+        case encrypted(Vault.Descriptor, migrationPending: Bool)
+    }
     private struct Revision: Equatable {
         let device: UInt64, inode: UInt64, size: Int64
         let modifiedSeconds: Int64, modifiedNanos: Int64, changedSeconds: Int64, changedNanos: Int64
@@ -29,10 +34,39 @@ public struct Persistence {
             #endif
         }
     }
-    public init(url: URL) { self.url = url }
+    public init(url: URL, encryption: Vault.Session? = nil) { self.url = url; self.encryption = encryption }
+    public func encrypted(using session: Vault.Session) -> Persistence {
+        var copy = self; copy.encryption = session; return copy
+    }
+    private func decodeStored(_ bytes: Data) throws -> Database {
+        if let encryption { return try Self.decode(encryption.open(bytes)) }
+        guard !Vault.isEncrypted(bytes) else { throw DataError.invalid("Unlock this encrypted vault first.") }
+        return try Self.decode(bytes)
+    }
+    private func encodeStored(_ database: Database) throws -> Data {
+        let bytes = try Self.encode(database)
+        return try encryption.map { try $0.seal(bytes) } ?? bytes
+    }
     public static func defaultURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let path = environment["CURIOS_DATA_DIR"], !path.isEmpty {
+            let folder = URL(fileURLWithPath: path)
+            let modern = folder.appendingPathComponent("curios.json"), legacy = folder.appendingPathComponent("daybook.json")
+            if hasProfile(modern) { return modern }
+            return hasProfile(legacy) ? legacy : modern
+        }
+        // Preserve the old override and existing profiles; never silently abandon them.
         if let path = environment["DAYBOOK_DATA_DIR"], !path.isEmpty { return URL(fileURLWithPath: path).appendingPathComponent("daybook.json") }
-        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Daybook/daybook.json")
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let modern = root.appendingPathComponent("Curios/curios.json")
+        if hasProfile(modern) { return modern }
+        let legacy = root.appendingPathComponent("Daybook")
+        if FileManager.default.fileExists(atPath: legacy.path) { return legacy.appendingPathComponent("daybook.json") }
+        return root.appendingPathComponent("Curios/curios.json")
+    }
+    private static func hasProfile(_ url: URL) -> Bool {
+        [url.path, url.path + ".backup", url.path + ".vault"].contains { path in
+            var info = stat(); return lstat(path, &info) == 0
+        }
     }
     public static func encode(_ database: Database) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601
@@ -151,17 +185,24 @@ public struct Persistence {
     }
     private static func read(_ fd: Int32) throws -> Data {
         let before = try inspect(fd)
-        guard before.st_size >= 0, before.st_size <= byteLimit else { throw DataError.invalid("The file exceeds the 64 MiB limit.") }
+        guard before.st_size >= 0, before.st_size <= Vault.fileLimit else { throw DataError.invalid("The file exceeds the storage size limit.") }
+        var limit = byteLimit
+        if before.st_size > byteLimit {
+            var prefix = [UInt8](repeating: 0, count: Vault.magic.count)
+            let count = prefix.withUnsafeMutableBytes { pread(fd, $0.baseAddress!, $0.count, 0) }
+            guard count == prefix.count, Data(prefix) == Vault.magic else { throw DataError.invalid("The file exceeds the 64 MiB plaintext limit.") }
+            limit = Vault.fileLimit
+        }
         var data = Data()
         data.reserveCapacity(Int(before.st_size)) // Only after descriptor size/type checks.
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
             let count = buffer.withUnsafeMutableBytes { raw in
-                readSystem(fd, raw.baseAddress!, min(raw.count, byteLimit - data.count + 1))
+                readSystem(fd, raw.baseAddress!, min(raw.count, limit - data.count + 1))
             }
             if count < 0 { if errno == EINTR { continue }; throw failure("Read file") }
             if count == 0 { break }
-            try checkSize(data.count + count)
+            guard data.count + count <= limit else { throw DataError.invalid("The file exceeds the storage size limit.") }
             data.append(contentsOf: buffer.prefix(count))
         }
         guard Revision(before) == Revision(try inspect(fd)), data.count == Int(before.st_size) else { throw conflict() }
@@ -201,13 +242,16 @@ public struct Persistence {
         do {
             return try transaction(create: false) { directory, name in
                 guard let fd = try Self.openFile(directory, name, privateMode: true) else {
+                    guard try Self.revision(directory, name + ".vault") == nil,
+                          try Self.revision(directory, name + ".backup") == nil else { throw DataError.invalid("An existing vault needs recovery. No new data was created.") }
                     observation.revision = nil; observation.known = true; return nil
                 }
                 defer { close(fd) }
                 observation.revision = Revision(try Self.inspect(fd)); observation.known = true
                 let bytes = try Self.read(fd)
                 guard try Self.revision(directory, name) == observation.revision else { observation.known = false; throw Self.conflict() }
-                return try Self.decode(bytes)
+                if encryption == nil, try Self.revision(directory, name + ".vault") != nil { throw DataError.invalid("Unlock or resume this vault's encryption migration first.") }
+                return try decodeStored(bytes)
             }
         } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
             // Only an actually absent parent means a new database. An unrelated
@@ -242,7 +286,7 @@ public struct Persistence {
     private static func replace(_ directory: Int32, _ name: String, writer: (Int32) throws -> Void,
                                 beforeCommit: () throws -> Void = {}) throws -> Revision? {
         _ = try revision(directory, name)
-        let temporary = ".daybook-" + UUID().uuidString + ".tmp"
+        let temporary = ".curios-" + UUID().uuidString + ".tmp"
         let fd = openat(directory, temporary, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw failure("Create private staged file") }
         defer { close(fd); _ = unlinkat(directory, temporary, 0) }
@@ -257,21 +301,146 @@ public struct Persistence {
         var info = stat()
         return fstat(fd, &info) == 0 ? Revision(info) : nil
     }
-    public func save(_ database: Database) throws {
-        let bytes = try Self.encode(database)
+    /// Inspect only bounded files. This acknowledges the current primary revision,
+    /// but does not decode task content or make a failed unlock writable.
+    public func storageState() throws -> StorageState {
+        do {
+            return try transaction(create: false) { directory, name in
+                let primary = try Self.bytes(directory, name)
+                observation.revision = try Self.revision(directory, name); observation.known = true
+                let marker = try Self.bytes(directory, name + ".vault")
+                if let primary, Vault.isEncrypted(primary) {
+                    let descriptor: Vault.Descriptor
+                    do { descriptor = try Vault.inspect(primary) }
+                    catch {
+                        // The enrollment snapshot supplies unlock metadata only;
+                        // a damaged primary still requires explicit backup recovery.
+                        guard let marker else { throw error }
+                        return .encrypted(try Vault.inspect(marker), migrationPending: false)
+                    }
+                    guard descriptor.kind == .database else { throw DataError.invalid("The primary is not a task vault.") }
+                    if let marker {
+                        let original = try Vault.inspect(marker)
+                        guard original.vaultID == descriptor.vaultID, original.generation == descriptor.generation else { throw DataError.invalid("Vault enrollment snapshot does not match the primary.") }
+                    }
+                    return .encrypted(descriptor, migrationPending: false)
+                }
+                if let marker {
+                    let hasBackup = try Self.revision(directory, name + ".backup") != nil
+                    return .encrypted(try Vault.inspect(marker), migrationPending: primary != nil || !hasBackup)
+                }
+                if primary != nil { return .plaintext }
+                guard try Self.revision(directory, name + ".backup") == nil else { throw DataError.invalid("The primary is missing. Preserve and recover its backup; no sample data was created.") }
+                return .empty
+            }
+        } catch let error as NSError where error.domain == NSPOSIXErrorDomain && error.code == Int(ENOENT) {
+            var info = stat()
+            guard lstat(url.deletingLastPathComponent().path, &info) != 0, errno == ENOENT else { throw error }
+            return .empty
+        }
+    }
+    private static func bytes(_ directory: Int32, _ name: String) throws -> Data? {
+        guard let fd = try openFile(directory, name, privateMode: true) else { return nil }
+        defer { close(fd) }; return try read(fd)
+    }
+    private static func legacyNames(_ directory: Int32, _ name: String) throws -> [String] {
+        let duplicate = dup(directory)
+        guard duplicate >= 0 else { throw failure("Inspect legacy copies") }
+        guard let stream = fdopendir(duplicate) else { close(duplicate); throw failure("Enumerate legacy copies") }
+        defer { closedir(stream) }
+        var names: [String] = []
+        while let entry = readdir(stream) {
+            var raw = entry.pointee.d_name
+            let capacity = MemoryLayout.size(ofValue: raw)
+            let value = withUnsafePointer(to: &raw) { pointer in
+                pointer.withMemoryRebound(to: CChar.self, capacity: capacity) { String(cString: $0) }
+            }
+            if value == name + ".backup" || value.hasPrefix(name + ".recovery-") || value.hasPrefix("recovered-") {
+                names.append(value)
+                guard names.count <= 256 else { throw DataError.invalid("Too many legacy recovery files. Preserve and organize them before encryption.") }
+            }
+        }
+        return names.sorted()
+    }
+    /// The encrypted .vault enrollment snapshot is also a persistent downgrade
+    /// barrier. Primary is committed last; interrupted conversion resumes after unlock.
+    /// No plaintext temporary file is created. Existing oversized/unsafe copies stop
+    /// conversion without deletion. Directory and file protections remain unchanged.
+    public func enableEncryption(using session: Vault.Session, initial: Database = Database()) throws -> Persistence {
         try transaction(create: true) { directory, name in
             try requireCurrent(directory, name)
+            let original = try Self.bytes(directory, name)
+            let marker = try Self.bytes(directory, name + ".vault")
+            if let marker { _ = try session.open(marker) }
+            let plaintext: Data
+            if let original {
+                if Vault.isEncrypted(original) { plaintext = try session.open(original) }
+                else { _ = try Self.decode(original); plaintext = original }
+            } else if let marker { plaintext = try session.open(marker) }
+            else { plaintext = try Self.encode(initial) }
+            let names = try Self.legacyNames(directory, name)
+            // Preflight every artifact before creating the barrier or changing copies.
+            var total = plaintext.count
+            for other in names {
+                guard let bytes = try Self.bytes(directory, other) else { throw Self.conflict() }
+                total += bytes.count
+                guard total <= 256 * 1024 * 1024 else { throw DataError.invalid("Legacy copies exceed the 256 MiB migration budget. Preserve and organize them before encryption.") }
+                if Vault.isEncrypted(bytes) {
+                    let kind = try Vault.inspect(bytes).kind
+                    _ = try session.open(bytes, kind: kind)
+                } else if other == name + ".backup" { _ = try Self.decode(bytes) }
+            }
+            let sealed = try session.seal(plaintext)
+            guard try session.open(sealed) == plaintext else { throw DataError.invalid("Encryption verification failed.") }
+            if marker == nil {
+                _ = try Self.replace(directory, name + ".vault", writer: { try Self.writeAll($0, sealed) }, beforeCommit: { try requireCurrent(directory, name) })
+            }
+            for other in names {
+                guard let bytes = try Self.bytes(directory, other) else { throw Self.conflict() }
+                if Vault.isEncrypted(bytes) { continue }
+                let kind: Vault.Kind = other == name + ".backup" ? .database : .recovery
+                let protected = try session.seal(bytes, kind: kind)
+                guard try session.open(protected, kind: kind) == bytes else { throw DataError.invalid("Legacy-copy encryption verification failed.") }
+                _ = try Self.replace(directory, other, writer: { try Self.writeAll($0, protected) }, beforeCommit: { try requireCurrent(directory, name) })
+            }
+            let revision = try Self.replace(directory, name, writer: { try Self.writeAll($0, sealed) }, beforeCommit: { try requireCurrent(directory, name) })
+            observation.revision = revision; observation.known = revision != nil
+        }
+        return encrypted(using: session)
+    }
+    public static func exportEncrypted(_ database: Database, to url: URL, passphrase: String) throws {
+        // Independent key material: exporting never grants access to the live vault.
+        let enrollment = try Vault.enroll(passphrase: passphrase)
+        let bytes = try enrollment.session.seal(encode(database), kind: .export)
+        let directory = try parent(of: url, create: false, managed: false)
+        defer { close(directory) }
+        _ = try replace(directory, url.lastPathComponent, writer: { try writeAll($0, bytes) })
+    }
+    public func save(_ database: Database) throws {
+        let bytes = try encodeStored(database)
+        try transaction(create: true) { directory, name in
+            try requireCurrent(directory, name)
+            if encryption == nil, try Self.revision(directory, name + ".vault") != nil { throw DataError.invalid("Plaintext writes are disabled for this vault.") }
             if let fd = try Self.openFile(directory, name, privateMode: true) {
                 defer { close(fd) }
                 observation.revision = Revision(try Self.inspect(fd))
                 let previous = try Self.read(fd)
-                _ = try Self.decode(previous)
+                _ = try decodeStored(previous)
                 _ = try Self.replace(directory, name + ".backup", writer: { try Self.writeAll($0, previous) },
                                      beforeCommit: { try requireCurrent(directory, name) })
             }
             let revision = try Self.replace(directory, name, writer: { try Self.writeAll($0, bytes) },
                                             beforeCommit: { try requireCurrent(directory, name) })
             observation.revision = revision; observation.known = revision != nil
+        }
+    }
+    public func validateExportDestination(_ destination: URL) throws {
+        guard destination.isFileURL else { throw Self.unsafe() }
+        let managedParent = try Self.physicalPath(url.deletingLastPathComponent().path)
+        let selectedParent = try Self.physicalPath(destination.deletingLastPathComponent().path)
+        let name = destination.lastPathComponent
+        guard managedParent != selectedParent || !(name == url.lastPathComponent || name.hasPrefix(url.lastPathComponent + ".") || name.hasPrefix("recovered-")) else {
+            throw DataError.invalid("Choose a separate export filename/directory, not a live database, backup, enrollment snapshot or persistent lock.")
         }
     }
     public static func export(_ database: Database, to url: URL) throws {
@@ -287,7 +456,8 @@ public struct Persistence {
             try requireCurrent(directory, name)
             guard let backup = try Self.openFile(directory, name + ".backup", privateMode: true) else { throw DataError.invalid("No backup exists.") }
             defer { close(backup) }
-            let bytes = try Self.read(backup), database = try Self.decode(bytes)
+            let bytes = try Self.read(backup), database = try decodeStored(bytes)
+            if encryption == nil, try Self.revision(directory, name + ".vault") != nil { throw DataError.invalid("Plaintext restoration is disabled for this vault.") }
             if let old = try Self.openFile(directory, name, privateMode: true) {
                 defer { close(old) }
                 let original = try Self.inspect(old)
@@ -295,7 +465,13 @@ public struct Persistence {
                 // Stream recovery copies, even for oversized/corrupt inputs. Keep the
                 // primary in place until the final atomic replacement is ready.
                 let recovery = name + ".recovery-" + UUID().uuidString
+                var protectedRecovery: Data?
+                if let encryption {
+                    let raw = try Self.read(old)
+                    protectedRecovery = (try? encryption.open(raw)) != nil ? raw : try encryption.seal(raw, kind: .recovery)
+                }
                 _ = try Self.replace(directory, recovery, writer: { target in
+                    if let protectedRecovery { try Self.writeAll(target, protectedRecovery); return }
                     var remaining = Int64(original.st_size)
                     var buffer = [UInt8](repeating: 0, count: 64 * 1024)
                     while remaining > 0 {

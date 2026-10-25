@@ -1,5 +1,5 @@
 import SwiftUI
-import DaybookCore
+import CuriosCore
 
 extension ListID {
     var symbol: String {

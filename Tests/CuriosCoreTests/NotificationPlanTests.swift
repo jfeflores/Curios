@@ -1,9 +1,9 @@
-#if DAYBOOK_STANDALONE_TESTS
+#if CURIOS_STANDALONE_TESTS
 import Foundation
 #else
 import XCTest
 #endif
-@testable import DaybookCore
+@testable import CuriosCore
 
 final class NotificationPlanTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -49,7 +49,7 @@ final class NotificationPlanTests: XCTestCase {
         var invalid = task(15); invalid.reminder = Date(timeIntervalSinceReferenceDate: .infinity)
         let db = database([good, completed, canceled, trashed, project, heading, template,
                            templateProject, templateChild, finishedProject, finishedChild, missing, past, current, invalid])
-        XCTAssertEqual(NotificationPlan(database: db, now: now).reminders.map(\.identifier), ["daybook-\(good.id.uuidString)"])
+        XCTAssertEqual(NotificationPlan(database: db, now: now).reminders.map(\.identifier), ["curios-\(good.id.uuidString)"])
     }
     func testDisabledNotificationsProduceEmptyPlan() {
         var db = database([task(1)]); db.preferences.notifications = false
@@ -62,7 +62,7 @@ final class NotificationPlanTests: XCTestCase {
         let a = NotificationPlan(database: database([tieB, first, tieA]), now: now)
         let b = NotificationPlan(database: database([tieA, tieB, first]), now: now)
         XCTAssertEqual(a, b)
-        XCTAssertEqual(a.reminders.map(\.identifier), [first, tieA, tieB].map { "daybook-\($0.id.uuidString)" })
+        XCTAssertEqual(a.reminders.map(\.identifier), [first, tieA, tieB].map { "curios-\($0.id.uuidString)" })
     }
     func testDeduplicationKeepsEarliestReminderDeterministically() {
         let early = task(1, after: 10)
@@ -80,7 +80,7 @@ final class NotificationPlanTests: XCTestCase {
         let db = database(junk + future.reversed())
         let plan = NotificationPlan(database: db, now: now)
         XCTAssertEqual(plan.reminders.count, 60)
-        XCTAssertEqual(plan.reminders.map(\.identifier), future.prefix(60).map { "daybook-\($0.id.uuidString)" })
+        XCTAssertEqual(plan.reminders.map(\.identifier), future.prefix(60).map { "curios-\($0.id.uuidString)" })
         let refilled = NotificationPlan(database: db, now: now.addingTimeInterval(60))
         XCTAssertEqual(refilled.reminders.count, 20)
         XCTAssertEqual(refilled.reminders.first?.date, now.addingTimeInterval(61))
