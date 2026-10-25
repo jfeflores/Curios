@@ -1,0 +1,27 @@
+# Local builds, investigation artifacts, diagnostics, and synthetic profiles
+.build/
+.swiftpm/
+build/
+.analysis/
+.DS_Store
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+
+# Local credentials and signing material; only sanitized examples may be public
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.mobileprovision
+
+# Runtime databases, backups, and recovery copies (not source fixtures)
+daybook.json
+daybook.json.*
+curios.json
+curios.json.*
+Daybook-*.json
+Curios-*.json

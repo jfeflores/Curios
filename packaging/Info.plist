@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Curios</string>
+  <key>CFBundleDisplayName</key><string>Curios</string>
+  <key>CFBundleIdentifier</key><string>local.curios.mac</string>
+  <key>CFBundleExecutable</key><string>Curios</string>
+  <key>CFBundleIconFile</key><string>Curios</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0.0</string>
+  <key>CFBundleVersion</key><string>100</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSCalendarsFullAccessUsageDescription</key><string>Curios can display your calendar events beside your tasks. It never changes your events. Access is optional.</string>
+  <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>Curios capture</string><key>CFBundleURLSchemes</key><array><string>curios</string><string>daybook</string></array></dict></array>
+</dict></plist>

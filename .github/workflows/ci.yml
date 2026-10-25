@@ -1,0 +1,26 @@
+name: Curios checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (Node 24)
+        with:
+          persist-credentials: false
+      - name: Package tests on the runner's Xcode toolchain
+        run: swift test
+      - name: Standalone domain and application regressions
+        run: ./scripts/test.sh
+      - name: Build the local development app without diagnostic hooks
+        run: ./scripts/build.sh
