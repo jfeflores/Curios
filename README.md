@@ -105,6 +105,8 @@ Capture requires an unlocked/legacy-open session and explicit preview/approval. 
 
 ## Verification and developer diagnostics
 
+Implementation checkpoint: `2072477` — encrypted vault, recovery, complementary FileVault guidance and the Curios module rename. The checks below cover that implementation; a source commit does not imply a published/notarized binary.
+
 Local verification includes **83 core/domain/security tests**, **19 existing plus 9 encrypted application groups**, **three isolated native UI scenarios**, and independent Python/OpenSSL passphrase/recovery interoperability. Normal/diagnostic builds, SourceKit checks and staged secret/content review are additional gates; these checks are not a third-party security audit. Remote CI for new changes requires an actual push and is not inferred from local results.
 
 ```sh
